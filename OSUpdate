@@ -3,17 +3,23 @@
   become: true
   become_user: root
   tasks:
-    - name: Update apt repo and cache on all Debian/Ubuntu boxes
-      apt: update_cache=yes force_apt_get=yes cache_valid_time=3600
+    - name: Check / freespace
+      shell: df / --output\=avail | tail -1
+      register: tmp_freespace
 
-    - name: Upgrade all packages on servers
-      apt: upgrade=dist force_apt_get=yes
+    - fail:
+        msg: / does not have the minimum space required to continue (3Gb requested).
+      when: tmp_freespace.stdout|float is lt 3000000
 
-    - name: Check if a reboot is needed on all servers
-      register: reboot_required_file
-      stat: path=/var/run/reboot-required get_md5=no
+    - name: upgrade all packages
+      yum: name=* state=latest
 
-    - name: Reboot the box if kernel updated
+    - name: Check for reboot if kernal is updated.
+      shell: LAST_KERNEL=$(rpm -q --last kernel | awk 'NR==1{sub(/kernel-/,""); print $1}'); CURRENT_KERNEL=$(uname -r); if [ $LAST_KERNEL != $CURRENT_KERNEL ]; then echo 'reboot'; else echo 'no'; fi
+      ignore_errors: true
+      register: reboot_hint
+
+    - name: Rebooting
       reboot:
         msg: "Reboot initiated by Ansible for kernel updates"
         connect_timeout: 5
@@ -21,4 +27,9 @@
         pre_reboot_delay: 0
         post_reboot_delay: 30
         test_command: uptime
-      when: reboot_required_file.stat.exists
+      when: reboot_hint.stdout.find("reboot") != -1
+      register: rebooting
+
+    - name: Wait for host to reboot...
+      pause: seconds=45
+      when: rebooting
